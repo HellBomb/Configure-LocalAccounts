@@ -72,7 +72,8 @@
     [Int]$Debugger = 3,
     [ValidateSet("Verbose","Debug","Info","Warn","Error","Fatal","Off")]
     [String]$LogLevel = "Info",
-    [Switch]$WhatIf
+    [Switch]$WhatIf,
+    [String]$LocalAdmin = "CST2Admin"
 )
 
 # ---------------------------------------------------- [Manual Configuration] ----------------------------------------------------
@@ -249,6 +250,7 @@ Function Add-LocalGroup {
     }
     Remove-Variable -name @("$user","$Group","ADSI","LocalAccounts","TargetUser","LocalGroups","GroupTypes","GroupLocation","CurrentGroup","TargetGroup") -Force -ErrorAction SilentlyContinue
 }
+
 Function Update-User {
     PARAM(
         [String]$Username,
@@ -287,9 +289,9 @@ Function Update-User {
         $TRUSTED_TO_AUTHENTICATE_FOR_DELEGATION=16777216
     #>
     
-    New-Variable -name ADSI -value (([ADSI]"WinNT://$($ENV:ComputerName),computer").psbase.children) -Force -ErrorAction Stop
+    New-Variable -name ADSI -value ([ADSI]"WinNT://$($ENV:ComputerName),computer") -Force -ErrorAction Stop
     New-Variable -Name LocalAccounts -Value (New-Object System.Collections.ArrayList) -Force -ErrorAction Stop
-    $ADSI | Where-Object {$_.schemaClassName -match "user"} | foreach-object {
+    $ADSI.psbase.children | Where-Object {$_.schemaClassName -match "user"} | foreach-object {
         [Void]$LocalAccounts.add([PSCustomObject]@{
             Name                       = $_.name.value -as [string]
             FullName                   = $_.fullName.value -as [string]
@@ -320,25 +322,25 @@ Function Update-User {
 
     #If user selected '-BuiltInAdmin' argument, set target user to the local built-in administrator.
     If ($BuiltInAdmin -eq $True) {
-        Set-Variable -Name Username -Value ($LocalAccounts.where({$_.SID -like "S-1-5-*-500"})) -Force
+        Set-Variable -Name Username -Value ($LocalAccounts.where({$_.SID -like "S-1-5-*-500"})).name -Force
     }
 
     #If user selected '-BuiltInAdmin' argument, set target user to the local built-in administrator.
     If ($BuiltInGuest -eq $True) {
-        Set-Variable -Name Username -Value ($LocalAccounts.where({$_.SID -like "S-1-5-*-501"})) -Force
+        Set-Variable -Name Username -Value ($LocalAccounts.where({$_.SID -like "S-1-5-*-501"})).name -Force
     }
 
     #Determine if the account exists and determine what actions to take from there.
     $TargetAccount = $LocalAccounts.Where({$_.Name -eq $Username})
-    IF (-not [String]::IsNullOrEmpty($TargetAccount)) {
-        $User = [ADSI]"WinNT://$env:computername/$userName,user"
-    } Else {
-        IF ($LocalUsers -NotContains $Username -AND $CreateIfNot) {
+    IF ([String]::IsNullOrEmpty($TargetAccount.name)) {
+        IF ($CreateIfNot) {
             $User = $ADSI.Create("User",$Username)
             [Bool]$SetRandomPassword = $True
         } Else {
-            Write-Warning -Message 'User does not exist. Use -CreateIfNot switch to create new accounts.'
+            Write-Warning -Message 'User, $username, does not exist. Use -CreateIfNot switch to create new accounts.'
         }
+    } Else {
+        $User = [ADSI]"WinNT://$env:computername/$($TargetAccount.name),user"
     }
 
     #Set NonFlag based options.
@@ -352,7 +354,7 @@ Function Update-User {
 
     #Add Flags
     ForEach ($Flag in $AddFlags) {
-            $User.invokeSet("userFlags", ($User.userFlags[0] -BOR $flag))
+        $User.invokeSet("userFlags", ($User.userFlags[0] -BOR $flag))
     }
 
     #Remove Flag Attributes
@@ -472,6 +474,7 @@ Update-User -BuiltInAdmin -SetRandomPassword -AddFlags "2","16","8388608","26214
 Update-User -BuiltInGuest -SetRandomPassword -AddFlags "2","16","8388608","262144" -RemoveFlags "32","256","2048","4096","8192","65536","4194304","524288","2097152","16777216"
 Update-User -Username $LocalAdmin -RemoveFlags "2","8","16","32","64","65536","262144","8388608" -CreateIfNot
 Add-LocalGroup -user $LocalAdmin -Group Administrators
+Add-LocalGroup -user $LocalAdmin -Group Users
 
 #-------------------------------------------------------- [End of Script] --------------------------------------------------------
 Remove-Variable -Name @("ScriptConfig","ScriptEnv") -ErrorAction SilentlyContinue -Force -Verbose:$Verbose
